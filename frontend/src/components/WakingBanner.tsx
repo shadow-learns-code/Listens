@@ -15,7 +15,7 @@ export default function WakingBanner() {
       role="status"
       aria-live="polite"
       data-testid="waking-banner"
-      className="glass-surface pointer-events-none fixed inset-x-3 top-3 z-[60] mx-auto max-w-md animate-fade-in overflow-hidden rounded-2xl px-4 py-3 md:top-5"
+      className="glass-surface pointer-events-none fixed inset-x-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[60] mx-auto max-w-md animate-fade-in overflow-hidden rounded-2xl px-4 py-3 md:top-5"
     >
       <div className="flex items-center gap-3">
         <SoundBars size={22} label="Waking the server" />

@@ -176,3 +176,77 @@ def test_a_different_song_by_the_same_artist_is_still_processed(env):
         db.execute(update(Track).where(Track.id == other).values(title="Completely Different"))
         db.commit()
         assert jobs.process_track(db, env.s3, env.cfg, other) == "ready"
+
+
+def test_unfinished_resumable_uploads_are_aborted_after_a_few_days_but_fresh_ones_are_kept():
+    from datetime import UTC, datetime, timedelta
+
+    from listens_common.storage import abort_stale_multipart
+
+    now = datetime.now(UTC)
+
+    class FakeS3:
+        """Two pages of unfinished uploads with known ages (the in-process test S3 stamps every upload with a fixed old date)."""
+
+        def __init__(self):
+            self.aborted = []
+            self.pages = {
+                None: {"Uploads": [{"Key": "originals/old1/source.mp3", "UploadId": "a", "Initiated": now - timedelta(days=5)},
+                                   {"Key": "originals/fresh/source.mp3", "UploadId": "b", "Initiated": now - timedelta(hours=2)}],
+                       "IsTruncated": True, "NextKeyMarker": "k", "NextUploadIdMarker": "m"},
+                "k": {"Uploads": [{"Key": "originals/old2/source.mp3", "UploadId": "c", "Initiated": now - timedelta(days=4)}], "IsTruncated": False},
+            }
+
+        def list_multipart_uploads(self, **kw):
+            return self.pages[kw.get("KeyMarker")]
+
+        def abort_multipart_upload(self, Bucket, Key, UploadId):
+            self.aborted.append(UploadId)
+
+    fake = FakeS3()
+    assert abort_stale_multipart(fake, "bucket", timedelta(days=3)) == 2
+    assert sorted(fake.aborted) == ["a", "c"]  # the two old ones, across both pages; the 2-hour-old upload is kept
+
+
+def test_the_stale_upload_cleanup_really_runs_inside_the_sweep(env):
+    """Guards the wiring (an import slip once made it fail silently): the sweep calls it and it reaches storage."""
+    from unittest.mock import patch
+
+    jobs._last_stale_upload_check = 0.0
+    with patch.object(jobs.storage, "abort_stale_multipart", return_value=2) as abort:
+        assert jobs.sweep_stale_uploads(env.s3, env.cfg) == 2
+    abort.assert_called_once()
+    assert jobs.sweep_stale_uploads(env.s3, env.cfg) == 0  # not again within the next few hours
+
+
+def test_the_database_connection_is_released_before_the_long_conversion_and_a_dropped_one_is_retried(env):
+    """Neon closes a connection that idles for minutes: the session must not hold one across the conversion, and the final
+    write is retried once if the connection died anyway."""
+    from unittest.mock import patch
+
+    from sqlalchemy.exc import OperationalError
+
+    tid = env.add_track(testing.make_audio(env.dir / "long.mp3", seconds=2))
+    seen = {}
+    original = jobs.transcode.transcode_hls
+
+    def spy(*a, **kw):
+        seen["in_transaction_during_conversion"] = env_session.in_transaction()
+        return original(*a, **kw)
+
+    dropped = {"n": 0}
+    with env.sessions() as env_session:
+        real_execute = env_session.execute
+
+        def flaky_execute(stmt, *a, **kw):
+            # the first UPDATE after the conversion (the "mark it ready" write) hits a connection Neon has closed
+            if seen.get("in_transaction_during_conversion") is not None and getattr(stmt, "is_update", False) and not dropped["n"]:
+                dropped["n"] += 1
+                raise OperationalError("UPDATE", {}, Exception("server closed the connection unexpectedly"))
+            return real_execute(stmt, *a, **kw)
+
+        with patch.object(jobs.transcode, "transcode_hls", spy), patch.object(env_session, "execute", flaky_execute):
+            assert jobs.process_track(env_session, env.s3, env.cfg, tid) == "ready"
+    assert seen["in_transaction_during_conversion"] is False  # connection handed back before the minutes-long work
+    assert dropped["n"] == 1  # the first final write "died" and the second succeeded
+    assert env.track(tid).status == "ready"

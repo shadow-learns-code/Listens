@@ -125,9 +125,12 @@ month, and keeping services awake around the clock would use them all. For faste
 PC (`scripts/run_local_worker.sh`, against production) while the laptop is on; each job goes to exactly one worker.
 A manual-only `warm-front-services` job wakes the user-facing services before you share the link.
 
-**Migrations.** The auth service runs `alembic upgrade head` every time it starts (including every wake-up). So a new
-migration must reach production in the same push as the code that contains it: applying it to the database first makes
-the deployed auth image fail with `Can't locate revision identified by '00NN'` and sign-in stays down until the push lands.
+**Migrations.** The auth service runs `alembic upgrade head` every time it starts (including every wake-up). So a migration
+must never be applied to the database before the push that contains it: the deployed auth image would fail with
+`Can't locate revision identified by '00NN'` and sign-in stays down until the push lands. A migration that adds columns the
+other services then read goes in **two pushes**: first only the migration file (auth applies it on its next start; check
+`alembic_version` in Neon), then the code and models that use the columns. Pushing both at once lets catalogue query a column
+that does not exist yet for the minute auth takes to wake and migrate.
 
 **Repeat check (before a song goes in).** Every way a song enters the library runs `dedupe.check_duplicate` first: the web
 upload, `import_local_folder.py` and `register_b2_orphans.py` (the import through the API uses the upload endpoint). Tiers, cheapest
@@ -172,6 +175,50 @@ credited sees the song on their page and in search; the API returns `artist` (pr
 artists' spelling variants are one person (`Yuvanshankar Raja` = `Yuvan Shankar Raja`, `SPB`; aliases live in
 `tamil_seed.py`). Duplicate detection compares the whole set of people, so `A/B` and `B, A` are the same credit.
 Uploads and the import scripts do this automatically; `split_artist_credits.py` converted the existing library.
+
+## Android app
+
+`android/` is a native Android app (package `com.shadowlistens.app`, no third-party libraries): a full-screen WebView of the live
+site plus what a browser cannot do. A foreground service with a media notification keeps music playing with the screen off
+(wake and Wi-Fi locks only while sound or an upload is in progress; the notification has previous / play-pause / next and
+shows the cover and progress). It also gives the file picker, native dialogs, edge-to-edge insets, and a "You're offline" page
+that retries by itself. Build and install:
+
+```
+# JDK 21, Gradle 8.10 and the Android SDK (platform 35, build-tools 35) as in android/README.md; the signing key is android/keystore.properties (gitignored, back it up)
+cd android && VERSION_CODE=3 VERSION_NAME=2.0.1 gradle assembleRelease      # -> app/build/outputs/apk/release/app-release.apk
+adb install -r app/build/outputs/apk/release/app-release.apk
+cp app/build/outputs/apk/release/app-release.apk ../frontend/public/app/shadow-listens.apk   # served at /app/shadow-listens.apk
+```
+
+The site detects the app (`window.NativeApp`, `frontend/src/lib/native.ts`) and sends it what is playing
+(`NativeBridge.tsx`). Android's WebView has no `navigator.mediaSession`, so an app that talks to a site that predates this
+(or where the bridge is missing) still works: `android/app/src/main/assets/native-shim.js` is injected after each page load,
+reads the site's own player (title, artist, cover, the `<audio>` element, the previous / play / next buttons) and presses
+those buttons when a notification button is tapped. It stands down as soon as the site reports to the app itself. The
+website is also an installable PWA (`manifest.webmanifest`, `sw.js`: app shell served from cache so it opens instantly even
+while the server sleeps; the Profile > Get the app page explains installing on Android and iPhone).
+
+## Uploads and song processing
+
+**Resumable upload** (`services/catalogue/app/uploads.py`, `frontend/src/lib/uploader.ts`, `store/uploads.ts`). The Upload page
+sends each file in 5 MiB parts (one file at a time, so memory stays small on a phone), each part straight into a Backblaze
+multipart upload, with the session in Redis: `POST /uploads/sessions` to start, `PUT .../parts/{n}`, `GET` to see what arrived,
+`POST .../complete`, `DELETE` to cancel. You can **pause, resume and cancel**; a dropped connection retries with backoff and
+resumes by itself when you are back online; a reload resumes if you pick the same file again. Nothing is created in the library
+until `complete`, and the same strict repeat check as a normal upload runs there, discarding a repeat without ever making a
+storage object. The queue lives outside the page, so uploads carry on while you browse, and the app's notification shows
+progress with a Pause / Resume button. The worker aborts multipart uploads abandoned for 3 days (they would otherwise count as
+stored data).
+
+**Song processing control** (`services/catalogue/app/processing_api.py`, the *Song processing* card on the Upload page). Shows how
+many of your songs are waiting, converting and ready, with **Start processing now** (wakes the Render worker, which drains
+the queue) and **Pause / Resume** (a flag in Redis, `listens_common/processing.py`). Pause stops **only the Render worker**;
+workers on your laptop (`scripts/run_local_worker.sh`, `scripts/process_queue.py`) never look at it and keep going. A song
+already being converted is finished first. Catalogue reaches the worker at `WORKER_URL` (defaults to the production worker).
+`process_queue.py` re-queues any song left in `processing` for more than 45 minutes by a stopped run, so an interrupted run can
+no longer leave a song stuck for days; the worker also gives the database connection back before a long conversion (Neon closes
+idle connections) and uploads the stream files four at a time.
 
 ## Interface
 
@@ -463,6 +510,24 @@ ALS (Phase 5) needs many listeners; with one user and a small library it learns 
 | Artist relatedness | ListenBrainz "similar artists" (real listening sessions) and MusicBrainz tags, stored in `artist_meta` |
 | Same film (album title), era, language | album tag, album date, Tamil script, and a built-in 80s/90s/modern Tamil singer and composer list (`tamil_seed.py`) |
 
+**Named moods.** Every song also carries scores for Love, Break-up, Sad, Pleasant, Happy, Party, Mass, Vibe, Nostalgic, Devotional
+and Motivational (`listens_common/emotion.py`); the strongest (up to three, clearly above your library's average) are its tags,
+used by the Search > Mood chips and the similarity below. Songs get them from the lighter signals above (a direction on the
+sad-happy / calm-energetic plane). Songs scored by `scripts/score_moods.py` on a computer with the CLAP audio model blend in a
+learned model as well: CLAP turns two 6 s pieces of the song into a 512-number fingerprint, and a kernel-ridge regression
+trained on 1,840 music clips that listeners rated on 28 emotions (Cowen et al. 2020, `baobaoh/13-dimensions-music-emotions`,
+`scripts/train_emotion_model.py`) predicts those ratings, which are combined into the moods. Held-out accuracy (Spearman
+correlation with listener ratings) is about 0.3 on average: good for energizing (0.55), calm (0.46) and sad (0.39), weak for
+romantic (0.27) and joyful (0.29), and useless for "painful" (0.09, so no mood uses it). It was trained on Western clips, so
+Tamil film songs are a domain shift: treat it as a second opinion, not ground truth. `MOOD_LEARNED_WEIGHT` (default 0.5) sets
+its share and `0` switches it off with no deploy. Songs without scores are unaffected. Scoring needs the `0007` columns
+(`mood_vector`, `moods`) and reads a few hundred KB per song from Backblaze:
+
+```
+.venv/Scripts/python scripts/score_moods.py                 # plan
+.venv/Scripts/python scripts/score_moods.py --apply         # score songs that have no mood yet
+```
+
 **Mood-based.** Similar tracks follow the *mood* of the song you play, not its artist: a sad song's neighbours are sad
 songs, whoever sings them. `listens_common/mood.py` places each song on two axes (valence: sad/dark ↔ happy/bright, arousal:
 calm/soft ↔ energetic/intense, the circumplex model used in music-emotion research) from the stored fingerprint, so no new
@@ -488,7 +553,14 @@ Fetch the open data for your library (dry run by default; needs `.env.prod` valu
 **Shuffle** (`frontend/src/lib/shuffle.ts`, Settings > Playback > Shuffle > Smart) draws each next song at random but
 weighted: liked songs a bit more often, songs played in the last 6 hours less, the same artist or film back to back far
 less, and songs of similar energy and tempo to the previous one more, so a soft melody is not followed by a loud beat.
-Nothing is excluded, it is a bias. Unit tests: `cd frontend && npm run test:unit`.
+Nothing is excluded, it is a bias.
+
+**Endless play** (`frontend/src/lib/endless.ts`, Settings > Playback > Endless play, on by default) keeps the music going. When
+two songs or fewer are left, the player asks for songs similar in mood to the last one (`/tracks/{id}/similar`, widening to the
+current song's neighbours and then Made for you when there are too few), drops anything already in the queue or heard in the last 3
+hours (relaxing that only if the library is small), orders the rest with the smart shuffle (variety and flow) and quietly adds up
+to 20. It is requested early, so there is no gap even while the free-tier server wakes; if the queue still runs out first, the
+end of the queue waits for the same request and carries straight on. Unit tests: `cd frontend && npm run test:unit`.
 
 ## Next
 

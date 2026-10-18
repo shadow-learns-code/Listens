@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
-from listens_common import mood as moodlib
+from listens_common import emotion, mood as moodlib
 from listens_common.models import Album, Artist, Playlist, Track, TrackArtist
 
 
@@ -135,13 +135,13 @@ def search_by(db: Session, q: str, by: str, limit: int = 10) -> dict[str, list]:
     if by == "genre":
         return {**_EMPTY, "tracks": _ready_tracks(db, func.lower(func.coalesce(Track.genre, "")).like(pat, escape=esc), limit=limit * 3)}
     if by == "mood":
-        label = moodlib.resolve_mood(q)
-        if label is None:
+        name = moodlib.resolve_mood_name(q)  # Love, Break-up, Sad, Pleasant, Happy, Party, Mass, Vibe, Nostalgic, Devotional, Motivational
+        if name is None:
             return dict(_EMPTY)
         from .recommendations import track_moods  # lazy: recommendations imports this package's taste module
 
-        moods = {t: m for t, m in track_moods(db).items() if m.label == label}
-        ranked = sorted(moods, key=lambda t: -moodlib.strength(moods[t]))[: limit * 3]
+        moods = {t: m for t, m in track_moods(db).items() if name in m.tags}
+        ranked = sorted(moods, key=lambda t: -moodlib.score_for(moods[t], name))[: limit * 3]  # the clearest examples first
         by_id = {t.id: t for t in db.scalars(select(Track).where(Track.id.in_(ranked))).unique()}
         return {**_EMPTY, "tracks": [by_id[i] for i in ranked if i in by_id]}
     return search(db, q, uuid.UUID(int=0), limit)  # not reached through the API (it routes "all" itself)
@@ -157,9 +157,10 @@ def facets(db: Session) -> dict[str, list[dict]]:
 
     counts: dict[str, int] = {}
     for m in track_moods(db).values():
-        counts[m.label] = counts.get(m.label, 0) + 1
+        for tag in m.tags:
+            counts[tag] = counts.get(tag, 0) + 1
     return {
         "genres": [{"name": g[1], "count": g[2]} for g in genres],
-        "moods": [{"id": label, "name": moodlib.MOOD_NAMES[label], "query": moodlib.MOOD_NAMES[label].lower(), "count": counts[label]}
-                  for label in ("melancholic", "upbeat", "calm", "intense", "balanced") if counts.get(label)],
+        "moods": [{"id": name, "name": name, "query": name.lower(), "count": counts[name]}
+                  for name in emotion.MOOD_NAMES if counts.get(name)],
     }

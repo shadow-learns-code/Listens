@@ -53,6 +53,8 @@ def clear_buckets(settings: Settings) -> None:
     s3 = get_s3()
     for b in (settings.s3_bucket_audio, settings.s3_bucket_covers):
         delete_prefix(s3, b, "")
+        for upload in s3.list_multipart_uploads(Bucket=b).get("Uploads", []):  # unfinished resumable uploads too
+            s3.abort_multipart_upload(Bucket=b, Key=upload["Key"], UploadId=upload["UploadId"])
 
 
 def sqlite_sessionmaker():

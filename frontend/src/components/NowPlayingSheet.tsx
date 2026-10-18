@@ -44,7 +44,7 @@ export default function NowPlayingSheet() {
       data-testid="now-playing-sheet"
       aria-label="Now playing"
       style={{ background: `radial-gradient(ellipse 100% 60% at 50% 0%, rgba(${ambient}, 0.4), transparent), var(--color-ink)` }}
-      className={`fixed inset-0 z-[35] flex flex-col overflow-y-auto transition-[transform,background] duration-200 ease-out motion-reduce:transition-none md:hidden ${shown ? "translate-y-0" : "translate-y-full"}`}
+      className={`fixed inset-0 z-[35] flex flex-col overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] transition-[transform,background] duration-200 ease-out motion-reduce:transition-none md:hidden ${shown ? "translate-y-0" : "translate-y-full"}`}
     >
       <div onPointerDown={sheetSwipe.onPointerDown} onPointerUp={sheetSwipe.onPointerUp} className="shrink-0">
         <header className="grid grid-cols-[44px_1fr_44px] items-center px-2 py-3">

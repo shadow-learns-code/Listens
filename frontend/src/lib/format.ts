@@ -10,3 +10,8 @@ export function formatTime(seconds: number): string {
 export function formatDuration(ms: number | null): string {
   return ms == null ? "–" : formatTime(ms / 1000);
 }
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}

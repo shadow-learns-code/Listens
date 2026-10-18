@@ -79,6 +79,7 @@ export default function PlayerEngine() {
 
   const track = usePlayer(currentTrack);
   const nextTrack = usePlayer((s) => s.queue[s.index + 1] ?? null);
+  const queueLength = usePlayer((s) => s.queue.length);
   const playing = usePlayer((s) => s.playing);
   const volume = usePlayer((s) => s.volume);
   const muted = usePlayer((s) => s.muted);
@@ -376,6 +377,11 @@ export default function PlayerEngine() {
     }, gaplessPlayback ? 0 : 3000);
     return () => clearTimeout(t);
   }, [nextTrack?.id, track?.id, gaplessPlayback]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- endless play: top the queue up while a few songs are still left, so there is never a gap --------------------
+  useEffect(() => {
+    if (track) void usePlayer.getState().refillQueue();
+  }, [track?.id, queueLength]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- lock-screen / media-key integration + tab title ----------------------------------------------
   useEffect(() => {

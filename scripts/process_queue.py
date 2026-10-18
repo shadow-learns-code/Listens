@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import UTC, datetime
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -55,6 +56,16 @@ def main() -> None:
     args = ap.parse_args()
 
     settings, s3, sessions = get_settings(), get_s3(), get_sessionmaker()
+    # A run that was stopped (or a computer that went to sleep) mid-song leaves it 'processing' for good: nothing else puts it
+    # back, so it would sit there for days. Anything 'processing' for longer than a conversion can take is stuck: re-queue it.
+    with sessions() as db:
+        stuck = db.execute(
+            update(Track).where(Track.status == "processing", Track.processing_started_at < datetime.now(UTC) - jobs.STUCK_PROCESSING)
+            .values(status="uploaded", processing_started_at=None)
+        ).rowcount
+        db.commit()
+    if stuck:
+        print(f"re-queued {stuck} song(s) stuck in 'processing' from an interrupted run", flush=True)
     sizes = original_sizes(s3, settings.s3_bucket_audio)
     with sessions() as db:
         waiting = [(t.id, t.title, t.source_key) for t in db.scalars(select(Track).where(Track.status == "uploaded").order_by(Track.created_at)).unique()]

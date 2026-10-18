@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     stream_public_prefix: str = "/api/stream"  # where the gateway mounts the stream service
     cover_url_ttl_seconds: int = 24 * 3600
     max_upload_mb: int = 500
+    # The HTTP-triggered transcode worker: "Start processing now" in the app asks it to drain the queue. Defaults to the
+    # production worker on Render; docker-compose runs the always-on loop instead (no HTTP), so there it just does nothing.
+    worker_url: str = "https://shadow-listens-worker.onrender.com"
 
     # Codec of the HLS renditions the worker produces. AAC plays everywhere (Safari/iOS need it);
     # "mp3" exists for environments whose browser build lacks AAC (e.g. open-source Chromium in CI).

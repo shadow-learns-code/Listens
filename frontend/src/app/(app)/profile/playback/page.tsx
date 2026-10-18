@@ -49,9 +49,9 @@ export default function PlaybackPage() {
 
       <SettingsSection title="Listening controls">
         <SettingsRow
-          label="Autoplay"
-          description="When the queue runs out, keep playing similar tracks."
-          action={<Toggle checked={p.autoplaySimilar} onChange={p.setAutoplaySimilar} label="Autoplay" />}
+          label="Endless play"
+          description="Never stop: a few songs before the queue ends, add similar-mood songs (never ones you just heard), mixed with the smart shuffle."
+          action={<Toggle checked={p.autoplaySimilar} onChange={p.setAutoplaySimilar} label="Endless play" />}
         />
       </SettingsSection>
 

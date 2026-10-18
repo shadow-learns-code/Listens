@@ -1,0 +1,54 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing. The keystore and its passwords live OUTSIDE git (android/keystore.properties is ignored); without it a
+// release build falls back to the debug key, which installs fine but cannot be updated in place by a differently signed build.
+def keystoreProps = new Properties()
+def keystoreFile = rootProject.file('keystore.properties')
+if (keystoreFile.exists()) {
+    keystoreFile.withInputStream { keystoreProps.load(it) }
+}
+
+android {
+    namespace 'com.shadowlistens.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.shadowlistens.app'
+        minSdk 26
+        targetSdk 35
+        versionCode((System.getenv('VERSION_CODE') ?: '2').toInteger())
+        versionName(System.getenv('VERSION_NAME') ?: '2.0.0')
+    }
+
+    signingConfigs {
+        release {
+            if (keystoreProps['storeFile']) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keystoreProps['storeFile'] ? signingConfigs.release : signingConfigs.debug
+        }
+        debug {
+            // signed with the same key so a debug build installs over the release one (and back) without uninstalling
+            signingConfig keystoreProps['storeFile'] ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// No third-party libraries on purpose: the app is a thin native shell around the framework WebView, MediaSession and
+// notification classes, so it stays tiny and has nothing to keep updated.

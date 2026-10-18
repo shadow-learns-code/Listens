@@ -162,3 +162,32 @@ def test_search_by_mood_finds_songs_of_that_mood_and_facets_list_what_exists(env
     f = env.client.get("/search/facets", headers=env.headers).json()
     assert {m["name"] for m in f["moods"]} >= {"Sad", "Happy"}
     assert {"name": "Soundtrack", "count": 2} in f["genres"]
+
+
+def test_scored_songs_are_found_by_everyday_words_and_the_chips_list_the_named_moods(env):
+    """Songs scored by the emotion model (scripts/score_moods.py) carry predicted ratings; mood search and the filter chips
+    use them: "heartbreak" finds the song rated sad, bittersweet and longing, and Break-up appears as a chip."""
+    import numpy as np
+
+    from listens_common import emotion
+
+    dims = emotion.dimensions()
+    rng = np.random.default_rng(7)
+    ids = {}
+    for k in range(8):
+        ids[k] = seed(env, f"Filler {k}", artist="Filler")[0]
+    ids["hurt"] = seed(env, "Broken Heart", artist="Sad Singer")[0]
+    with env.sessions() as db:
+        for key, tid in ids.items():
+            ratings = {d: float(rng.normal(5, 0.3)) for d in dims}
+            if key == "hurt":
+                ratings.update({"sad/depressing": 8.5, "bittersweet": 8.5, "tender/longing": 8.0})
+            db.query(Track).filter_by(id=uuid.UUID(tid)).update({"moods": {"ratings": ratings}})
+        db.commit()
+
+    found = env.client.get("/search", params={"q": "heartbreak", "by": "mood"}, headers=env.headers).json()["tracks"]
+    assert found and found[0]["title"] == "Broken Heart"
+    assert env.client.get("/search", params={"q": "break-up", "by": "mood"}, headers=env.headers).json()["tracks"][0]["title"] == "Broken Heart"
+    chips = env.client.get("/search/facets", headers=env.headers).json()["moods"]
+    assert "Break-up" in {m["name"] for m in chips}
+    assert all({"id", "name", "query", "count"} <= set(m) for m in chips)

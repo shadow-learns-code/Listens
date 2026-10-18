@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+: the system splash screen shows the app icon on the app's dark background while it starts. -->
+    <style name="Theme.ShadowListens" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="android:windowSplashScreenBackground">@color/background</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/background</item>
+        <item name="android:colorPrimary">@color/background</item>
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+</resources>

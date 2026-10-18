@@ -66,7 +66,7 @@ export default function Sidebar() {
 
       {/* mobile: bottom tab bar. A glass pill slides to the active tab (spring-like overshoot), the active icon
           lifts and pops once when it becomes active. All motion is dropped for prefers-reduced-motion. */}
-      <nav aria-label="Main" className="glass-clear fixed inset-x-3 bottom-3 z-30 flex h-14 rounded-full px-2.5 md:hidden">
+      <nav aria-label="Main" className="glass-clear fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-30 flex h-14 rounded-full px-2.5 md:hidden">
         <span
           aria-hidden
           className="pointer-events-none absolute inset-y-1 left-2.5 transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.34,1.4,0.64,1)] motion-reduce:transition-none"

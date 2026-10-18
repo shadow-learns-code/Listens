@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 13+ "themed icon" layer: one colour, the system tints it. The sound bars are cut out of the crescent. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="1.72"
+        android:scaleY="1.72"
+        android:translateX="29.06"
+        android:translateY="26.48">
+        <path
+            android:fillColor="#000000"
+            android:fillType="evenOdd"
+            android:pathData="M22,4.5A12.5,12.5 0 1,0 27.5,22 10,10 0 0,1 22,4.5z M11,14a1,1 0 0,1 2,0v4a1,1 0 0,1 -2,0z M15,11a1,1 0 0,1 2,0v10a1,1 0 0,1 -2,0z" />
+    </group>
+</vector>

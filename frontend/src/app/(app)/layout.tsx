@@ -6,6 +6,7 @@ import AmbientBackdrop from "@/components/AmbientBackdrop";
 import BackButton from "@/components/BackButton";
 import { CenteredLoader } from "@/components/Loaders";
 import LyricsPanel from "@/components/LyricsPanel";
+import NativeBridge from "@/components/NativeBridge";
 import NavHistory from "@/components/NavHistory";
 import RecentsTracker from "@/components/RecentsTracker";
 import NowPlayingSheet from "@/components/NowPlayingSheet";
@@ -57,9 +58,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     >
       <AmbientBackdrop />
       <NavHistory />
+      <NativeBridge />
       <RecentsTracker />
       <Sidebar />
-      <main className="mx-auto max-w-6xl px-4 pb-44 pt-6 md:px-8">
+      <main className="mx-auto max-w-6xl px-4 pb-44 pt-[calc(1.5rem+env(safe-area-inset-top))] md:px-8">
         <BackButton />
         <div key={pathname} className="animate-fade-in">{children}</div>
       </main>

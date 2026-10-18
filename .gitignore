@@ -9,3 +9,15 @@ node_modules/
 AGENT_HANDOFF.md
 .wrangler/
 .env.prod
+
+# Android app: signing key and build output never go in git
+android/keystore.properties
+*.keystore
+*.jks
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# python packaging output
+libs/common/build/

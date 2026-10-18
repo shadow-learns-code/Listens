@@ -1,6 +1,6 @@
 "use client";
 
-import { RecentsIcon, SettingsIcon, StatsIcon } from "@/components/icons";
+import { DevicesIcon, RecentsIcon, SettingsIcon, StatsIcon } from "@/components/icons";
 import { SettingsRow } from "@/components/SettingsPage";
 import { useAuth } from "@/store/auth";
 
@@ -28,6 +28,7 @@ export default function ProfilePage() {
         <SettingsRow href="/profile/listening-stats" label={<><StatsIcon /> Listening stats</>} />
         <SettingsRow href="/profile/recents" label={<><RecentsIcon /> Recents</>} />
         <SettingsRow href="/profile/settings" label={<><SettingsIcon /> Settings and privacy</>} />
+        <SettingsRow href="/profile/install" label={<><DevicesIcon /> Get the app</>} />
       </nav>
     </div>
   );

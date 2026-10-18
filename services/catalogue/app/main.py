@@ -16,17 +16,18 @@ from listens_common.models import Album, Artist, Follow, Track, TrackArtist
 from listens_common.storage import delete_prefix, get_s3
 from listens_common.web import current_user_id, get_redis
 
-from . import recommendations
+from . import ingest, recommendations
+from . import uploads as uploads_mod
 from . import search as search_mod
 from .analytics import router as analytics_router
 from .events import router as events_router
 from .library import router as library_router
+from .processing_api import router as processing_router
 from .schemas import (
     AlbumCardOut, AlbumDetail, AlbumHit, AlbumRef, ArtistDetail, ArtistRef, LyricsOut, PlaylistHit, SearchOut,
     TrackOut, UploadOut,
 )
 from .serialize import track_out
-from .tags import read_duration_ms, read_lyrics, read_tags
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("catalogue")
@@ -35,15 +36,16 @@ app = FastAPI(title="Shadow Listens - Catalogue", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origin_list,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 app.include_router(library_router)
 app.include_router(events_router)
 app.include_router(analytics_router)
+app.include_router(uploads_mod.router)
+app.include_router(processing_router)
 
-TRANSCODE_STREAM = "jobs:transcode"
-ALLOWED_EXT = {".mp3", ".flac", ".wav", ".ogg", ".oga", ".opus", ".m4a", ".aac"}
+ALLOWED_EXT = ingest.ALLOWED_EXT
 CHUNK = 1024 * 1024
 
 
@@ -107,56 +109,27 @@ def upload(
         response.status_code = status.HTTP_200_OK
         return UploadOut(track=track_out(existing, settings, user_id), duplicate=True)
 
-    tags = read_tags(file.file)
-    lyrics = read_lyrics(file.file)
-    stem = os.path.splitext(os.path.basename(file.filename or "Untitled"))[0]
-    # Explicit form values win over embedded tags, which win over filename/"Unknown Artist".
-    final_title = (title or tags.get("title") or stem).strip()[:200]
-    final_artist = (artist or tags.get("artist") or "Unknown Artist").strip()[:200]
-    album_name = album or tags.get("album")
-    # Same song in a different file (e.g. a re-encode): refuse it the same way a byte-identical
-    # upload is refused, before creating any artist/album rows or touching B2.
-    # (checked before anything reaches B2). Exact and near matches alike: see dedupe.check_duplicate.
-    duration_ms = read_duration_ms(file.file)
-    match = None if force else dedupe.check_duplicate(
-        db, user_id, title=final_title, credit=final_artist, album=album_name.strip() if album_name else None,
-        duration_ms=duration_ms, sha256=digest,
+    # Refuse a repeat (identical, or the same song with a spelling/credit change) before anything reaches B2.
+    prepared, match = ingest.inspect(
+        db, user_id, fileobj=file.file, filename=file.filename, digest=digest,
+        fields=ingest.Fields(license=license, title=title, artist=artist, album=album, genre=genre, force=force),
     )
     if match:
         response.status_code = status.HTTP_200_OK
         return UploadOut(track=track_out(match.track, settings, user_id), duplicate=True, reason=match.reason)
-    # one artist per person in the credit ("A/B", "A, B" and "A;B" all credit A and B); the first is the primary artist
-    people = artists.ensure_artists(db, user_id, final_artist)
-    artist_row = people[0]
-    # the album title without store boilerplate; the same film under another first-listed singer is the same album
-    album_row = albumlib.find_or_create_album(db, people, album_name.strip()) if album_name else None
 
     track_id = uuid.uuid4()
     source_key = f"originals/{track_id}/source{ext}"
-    file.file.seek(0)
     s3 = get_s3()
-    s3.upload_fileobj(file.file, settings.s3_bucket_audio, source_key)
-    track = Track(
-        id=track_id, artist_id=artist_row.id, album_id=album_row.id if album_row else None, uploader_id=user_id,
-        title=final_title, genre=(genre or tags.get("genre") or None), license=license.strip(),
-        status="uploaded", source_key=source_key, content_sha256=digest, duration_ms=duration_ms,
-        lyrics=lyrics.get("lyrics"), lyrics_synced=lyrics.get("lyrics_synced"),
-    )
-    db.add(track)
-    db.flush()
-    artists.set_track_artists(db, track, people)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
+
+    def store() -> None:
+        file.file.seek(0)
+        s3.upload_fileobj(file.file, settings.s3_bucket_audio, source_key)
+
+    def unstore() -> None:
         s3.delete_object(Bucket=settings.s3_bucket_audio, Key=source_key)
-        raise
-    # If this enqueue is lost (Redis down), the worker's periodic sweep re-queues stuck 'uploaded' tracks.
-    try:
-        r.xadd(TRANSCODE_STREAM, {"track_id": str(track_id), "attempt": "0"})
-    except Exception:
-        log.exception("could not enqueue transcode job for %s; the worker sweep will pick it up", track_id)
-    db.refresh(track)
+
+    track = ingest.commit_track(db, r, user_id, prepared, track_id=track_id, source_key=source_key, store=store, unstore=unstore)
     log.info("uploaded track %s (%d bytes) by %s", track_id, size, user_id)
     return UploadOut(track=track_out(track, settings, user_id), duplicate=False)
 

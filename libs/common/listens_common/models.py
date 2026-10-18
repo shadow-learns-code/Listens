@@ -131,6 +131,10 @@ class Track(Base):
     # Timbre/harmony fingerprint (MFCC + chroma + spectral contrast means, ~34 floats) from the same
     # librosa pass. Raw values; the recommender standardises per dimension across the library.
     audio_vector: Mapped[list[float] | None] = mapped_column(JSON)
+    # Mood (listens_common.emotion): the CLAP fingerprint (512 numbers, deferred: only the scoring script reads it) and
+    # {"ratings": {emotion: predicted rating}} from it. NULL until scripts/score_moods.py has run for the song.
+    mood_vector: Mapped[list[float] | None] = mapped_column(JSON, deferred=True)
+    moods: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = _created_at()
 
     # `artist` is the PRIMARY (first credited) artist; `artists` is everyone credited, in credit order, read through

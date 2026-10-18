@@ -43,11 +43,18 @@ def cap_per_artist(tracks: list[Track], max_per_artist: int = MAX_PER_ARTIST) ->
 
 
 def track_moods(db: Session) -> dict[uuid.UUID, mood.Mood]:
-    """Mood of every ready track that has an audio fingerprint (one query; empty for a library too small to compare)."""
+    """Mood of every ready track that has an audio fingerprint or has been scored (one query; empty for a library too small to
+    compare). Scored songs (scripts/score_moods.py) blend the learned emotion model with the lighter signals."""
     rows = db.execute(
-        select(Track.id, Track.audio_vector, Track.tempo_bpm, Track.energy).where(Track.status == "ready", Track.audio_vector.is_not(None))
+        select(Track.id, Track.audio_vector, Track.tempo_bpm, Track.energy, Track.moods)
+        .where(Track.status == "ready", (Track.audio_vector.is_not(None)) | (Track.moods.is_not(None)))
     ).all()
-    return mood.compute_moods({r[0]: (r[1], r[2], r[3]) for r in rows})
+    return mood.compute_moods({r[0]: (r[1], r[2], r[3]) for r in rows}, ratings=_ratings(rows, 4))
+
+
+def _ratings(rows, index: int) -> dict:
+    """{track id: {emotion: predicted rating}} for the rows whose moods column holds ratings."""
+    return {r[0]: r[index]["ratings"] for r in rows if isinstance(r[index], dict) and r[index].get("ratings")}
 
 
 def load_library(db: Session, include: set[uuid.UUID] | None = None) -> taste.Library:
@@ -57,14 +64,14 @@ def load_library(db: Session, include: set[uuid.UUID] | None = None) -> taste.Li
     rows = db.execute(
         select(
             Track.id, Track.artist_id, Track.album_id, Track.genre, Track.tempo_bpm, Track.energy, Track.audio_vector,
-            Track.title, Artist.name, Album.title, Album.release_date, func.substr(Track.lyrics, 1, 300),
+            Track.title, Artist.name, Album.title, Album.release_date, func.substr(Track.lyrics, 1, 300), Track.moods,
         )
         .join(Artist, Artist.id == Track.artist_id)
         .outerjoin(Album, Album.id == Track.album_id)
         .where((Track.status == "ready") | (Track.id.in_(include or set())))
     ).all()
     standardised = taste.Library.standardise({r[0]: r[6] for r in rows if r[6]})
-    moods = mood.compute_moods({r[0]: (r[6], r[4], r[5]) for r in rows if r[6]})
+    moods = mood.compute_moods({r[0]: (r[6], r[4], r[5]) for r in rows if r[6]}, ratings=_ratings(rows, 12))
     seeds = {r[1]: tamil_seed.lookup(r[8]) for r in rows}  # artist_id -> built-in Tamil entry, if any
     items = []
     for r in rows:

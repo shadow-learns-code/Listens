@@ -17,6 +17,7 @@ import time
 import redis
 from fastapi import Depends, FastAPI
 
+from listens_common import processing
 from listens_common.config import Settings, get_settings
 from listens_common.db import get_sessionmaker
 from listens_common.storage import get_s3
@@ -61,7 +62,13 @@ def tick(
     s3=Depends(get_s3_client),
 ) -> dict:
     """Reclaim stuck jobs, then drain the queue (one job per poll) until it's empty or
-    max_seconds elapses. Bounded so a single invocation can't run forever."""
+    max_seconds elapses. Bounded so a single invocation can't run forever.
+
+    This is the Render worker. When processing is paused from the app (listens_common.processing) it does nothing; workers
+    running on a laptop (scripts/run_local_worker.sh, scripts/process_queue.py) never look at the switch and keep going."""
+    if processing.is_paused(r):
+        log.info("tick skipped: processing is paused from the app")
+        return {"handled": 0, "paused": True}
     jobs.ensure_group(r)
     jobs.sweep(r, sessions, s3, settings, _consumer)
 

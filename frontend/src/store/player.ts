@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { get as apiGet } from "@/lib/api";
+import { BATCH, continuation, REFILL_AT, upcomingCount } from "@/lib/endless";
 import { getRecentPlays } from "@/lib/recentPlays";
 import { smartShuffle } from "@/lib/shuffle";
 import type { Track } from "@/lib/types";
@@ -10,6 +11,7 @@ export type RepeatMode = "off" | "all" | "one";
 export type ShuffleStyle = "standard" | "smart";
 
 const PREFS_KEY = "listens.player";
+let inflight: Promise<number> | null = null; // the refill in progress, if any (shared so the end of the queue can wait for it)
 
 interface Prefs {
   volume: number;
@@ -133,6 +135,8 @@ interface PlayerState {
   removeAt: (i: number) => void;
   jumpTo: (i: number) => void;
   next: () => void;
+  /** Endless play: add similar songs when few are left (see lib/endless.ts). Resolves to how many were added. */
+  refillQueue: (force?: boolean) => Promise<number>;
   prev: () => void;
   toggle: () => void;
   setPlaying: (p: boolean) => void;
@@ -232,20 +236,35 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       set({ index: 0, playing: true, currentTime: 0, error: null, lastSkipReason: "next_button" });
       return;
     }
-    const last = s.queue[s.queue.length - 1];
-    if (s.autoplaySimilar && last) {
-      apiGet<Track[]>(`/api/catalogue/tracks/${last.id}/similar`)
-        .then((similar) => {
-          if (!similar.length) {
-            set({ playing: false });
-            return;
-          }
-          set((s2) => ({ queue: [...s2.queue, ...similar], index: s2.index + 1, playing: true, currentTime: 0, error: null, lastSkipReason: "next_button" }));
-        })
-        .catch(() => set({ playing: false }));
+    if (s.autoplaySimilar && s.queue.length) {
+      // the queue ran out before the early refill finished (or it failed): add songs now and carry straight on
+      get().refillQueue(true).then((added) => {
+        const s2 = get();
+        if (added && s2.index + 1 < s2.queue.length) set({ index: s2.index + 1, playing: true, currentTime: 0, error: null, lastSkipReason: "next_button" });
+        else set({ playing: false });
+      });
       return;
     }
     set({ playing: false }); // end of queue: stop
+  },
+  refillQueue: (force = false) => {
+    if (inflight) return inflight; // already fetching: callers (e.g. the end of the queue) wait for that one
+    const s = get();
+    if (!s.autoplaySimilar || !s.queue.length || s.index < 0) return Promise.resolve(0);
+    if (!force && upcomingCount(s.queue.length, s.index) > REFILL_AT) return Promise.resolve(0);
+    inflight = (async () => {
+      const picked = await continuation(
+        s.queue, s.index,
+        { similar: (id, limit) => apiGet<Track[]>(`/api/catalogue/tracks/${id}/similar?limit=${limit}`), madeForYou: (limit) => apiGet<Track[]>(`/api/catalogue/home/made-for-you?limit=${limit}`) },
+        { style: s.shuffleStyle, liked: useLikes.getState().ids, recentlyPlayed: getRecentPlays(), limit: BATCH },
+      );
+      if (!picked.length) return 0;
+      set((s2) => ({ queue: [...s2.queue, ...picked], preShuffleQueue: s2.preShuffleQueue ? [...s2.preShuffleQueue, ...picked] : null }));
+      return picked.length;
+    })().finally(() => {
+      inflight = null;
+    });
+    return inflight;
   },
   prev: () => {
     const s = get();
