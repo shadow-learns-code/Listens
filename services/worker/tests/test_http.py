@@ -66,3 +66,28 @@ def test_paused_from_the_app_stops_the_render_worker_but_not_a_laptop_worker(env
         assert c.post("/tick", params={"max_seconds": 10, "block_ms": 50}).json() == {"handled": 1}
     finally:
         app.dependency_overrides.clear()
+
+
+def test_pausing_while_a_run_is_going_stops_it_after_the_song_in_progress(env):
+    """The card promises a song already being converted finishes and no new one starts: that has to hold mid-run, not only
+    at the start of the next run."""
+    from unittest.mock import patch
+
+    from listens_common import processing
+
+    c = client_for(env)
+    try:
+        jobs.ensure_group(env.redis)
+        calls = []
+
+        def one_job_then_the_user_pauses(*a, **kw):
+            calls.append(1)
+            processing.set_paused(env.redis, True)  # the listener taps Pause while this song converts
+            return 1
+
+        with patch.object(jobs, "poll_once", one_job_then_the_user_pauses):
+            r = c.post("/tick", params={"max_seconds": 30, "block_ms": 10})
+        assert r.json() == {"handled": 1}
+        assert len(calls) == 1  # no second song was started
+    finally:
+        app.dependency_overrides.clear()

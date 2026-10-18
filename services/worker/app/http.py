@@ -75,6 +75,9 @@ def tick(
     start = time.monotonic()
     handled = 0
     while time.monotonic() - start < max_seconds:
+        if processing.is_paused(r):  # paused from the app while this run was going: finish the song just done, take no more
+            log.info("tick stopping early: processing was paused from the app")
+            break
         n = jobs.poll_once(r, sessions, s3, settings, _consumer, block_ms=block_ms)
         if n == 0:
             break
