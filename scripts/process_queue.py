@@ -95,9 +95,12 @@ def main() -> None:
                 result = jobs.process_track(db, s3, settings, tid)
             return title, result, size, time.time() - started
         except Exception as exc:  # noqa: BLE001 - one bad song must not stop the run
-            with sessions() as db:
-                db.execute(update(Track).where(Track.id == tid, Track.status == "processing").values(status="uploaded"))
-                db.commit()
+            try:
+                with sessions() as db:
+                    db.execute(update(Track).where(Track.id == tid, Track.status == "processing").values(status="uploaded"))
+                    db.commit()
+            except Exception:  # noqa: BLE001 - the connection may be down too (a network blip): the next run re-queues it
+                pass
             return title, f"FAILED, left queued ({str(exc)[:80]})", size, time.time() - started
 
     ready = failed = 0
